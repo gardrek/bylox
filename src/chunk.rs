@@ -8,6 +8,12 @@ use derive_try_from_primitive::TryFromPrimitive;
 pub enum OpCode {
     Constant,
     LongConstant,
+    Negate,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
     Return,
 }
 
@@ -15,7 +21,6 @@ pub enum OpCode {
 pub struct Chunk {
     code: Vec<u8>,
     constants: Vec<Value>,
-    //~ lines: Vec<usize>,
     lines: LineMap,
 }
 
@@ -92,11 +97,18 @@ impl Chunk {
         }
 
         let instruction = self.code[offset];
+        use OpCode::*;
         match instruction.try_into() {
             Ok(i) => match i {
-                OpCode::Return => simple_instruction("OP_RETURN", offset),
-                OpCode::Constant => self.constant_instruction("OP_CONSTANT", offset),
-                OpCode::LongConstant => self.long_constant_instruction("OP_CONSTANT_LONG", offset),
+                Constant => self.constant_instruction("OP_CONSTANT", offset),
+                LongConstant => self.long_constant_instruction("OP_CONSTANT_LONG", offset),
+                Negate => simple_instruction("OP_NEGATE", offset),
+                Return => simple_instruction("OP_RETURN", offset),
+                Add => simple_instruction("OP_ADD", offset),
+                Subtract => simple_instruction("OP_SUBTRACT", offset),
+                Multiply => simple_instruction("OP_MULTIPLY", offset),
+                Divide => simple_instruction("OP_DIVIDE", offset),
+                Remainder => simple_instruction("OP_REMAINDER", offset),
             },
             _ => {
                 println!("Unknown opcode {}", instruction);
