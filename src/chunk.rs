@@ -8,12 +8,19 @@ use derive_try_from_primitive::TryFromPrimitive;
 pub enum OpCode {
     Constant,
     LongConstant,
-    Negate,
+    Nil,
+    True,
+    False,
+    Equal,
+    Greater,
+    Less,
     Add,
     Subtract,
     Multiply,
     Divide,
     Remainder,
+    Not,
+    Negate,
     Return,
 }
 
@@ -61,13 +68,13 @@ impl Chunk {
         self.constants.len() - 1
     }
 
-    pub fn get_constant(&self, id: usize) -> Value {
-        self.constants[id]
+    pub fn get_constant(&self, id: usize) -> &Value {
+        &self.constants[id]
     }
 }
 
 impl Chunk {
-    fn get_line(&self, offset: usize) -> usize {
+    pub fn get_line(&self, offset: usize) -> usize {
         self.lines.get_line(offset)
     }
 
@@ -102,13 +109,20 @@ impl Chunk {
             Ok(i) => match i {
                 Constant => self.constant_instruction("OP_CONSTANT", offset),
                 LongConstant => self.long_constant_instruction("OP_CONSTANT_LONG", offset),
-                Negate => simple_instruction("OP_NEGATE", offset),
-                Return => simple_instruction("OP_RETURN", offset),
+                Nil => simple_instruction("OP_NIL", offset),
+                True => simple_instruction("OP_TRUE", offset),
+                False => simple_instruction("OP_FALSE", offset),
+                Equal => simple_instruction("OP_EQUAL", offset),
+                Greater => simple_instruction("OP_GREATER", offset),
+                Less => simple_instruction("OP_LESS", offset),
                 Add => simple_instruction("OP_ADD", offset),
                 Subtract => simple_instruction("OP_SUBTRACT", offset),
                 Multiply => simple_instruction("OP_MULTIPLY", offset),
                 Divide => simple_instruction("OP_DIVIDE", offset),
                 Remainder => simple_instruction("OP_REMAINDER", offset),
+                Not => simple_instruction("OP_NOT", offset),
+                Negate => simple_instruction("OP_NEGATE", offset),
+                Return => simple_instruction("OP_RETURN", offset),
             },
             _ => {
                 println!("Unknown opcode {}", instruction);
@@ -119,7 +133,7 @@ impl Chunk {
 
     fn constant_instruction(&self, name: &str, offset: usize) -> usize {
         let constant = self.code[offset + 1];
-        let value = self.constants[constant as usize];
+        let value = &self.constants[constant as usize];
         println!("{:16} {} {}", name, constant, value);
         offset + 2
     }
@@ -127,7 +141,7 @@ impl Chunk {
     fn long_constant_instruction(&self, name: &str, offset: usize) -> usize {
         let constant_bytes = &self.code[offset..(offset + 4)];
         let constant = u32::from_be_bytes(constant_bytes.try_into().unwrap()) & 0xffffff;
-        let value = self.constants[constant as usize];
+        let value = &self.constants[constant as usize];
         println!("{:16} {} {}", name, constant, value);
         offset + 4
     }

@@ -21,9 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut input = String::new();
                 stdin.read_line(&mut input)?;
 
-                let chunk = bylox::compile(&input)?;
-
-                vm.interpret(Box::new(chunk))?;
+                vm.interpret(&input)?;
             }
         }
     }

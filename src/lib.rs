@@ -1,6 +1,7 @@
 mod compiler;
 mod debug;
 mod scanner;
+//~ mod table;
 mod value;
 
 pub mod arg;
@@ -17,12 +18,10 @@ pub fn run_file(path: std::path::PathBuf) -> Result<(), Box<dyn std::error::Erro
     Ok(run_string(&source)?)
 }
 
-pub fn run_string(source: &str) -> Result<(), vm::InterpretResult> {
-    let chunk = compiler::compile(source)?;
+pub fn run_string(source: &str) -> Result<(), vm::InterpretError> {
+    let mut vm = vm::Vm::new(Box::default());
 
-    let mut vm = vm::Vm::new(Box::new(chunk));
-
-    vm.run()
+    vm.interpret(source)
 }
 
 pub fn run_test() {

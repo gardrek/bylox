@@ -1,37 +1,37 @@
 #[derive(Default)]
-pub struct Scanner {
+pub struct Scanner<'a> {
+    source: &'a str,
     start: usize,
     current: usize,
     line: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Token<'a> {
     pub kind: TokenKind,
     pub span: &'a str,
     pub line: usize,
 }
 
-impl Scanner {
-    pub fn new() -> Scanner {
-        let mut scanner = Scanner::default();
-        scanner.init();
-        scanner
+impl<'s> Scanner<'s> {
+    pub fn new(source: &str) -> Scanner {
+        Scanner {
+            source,
+            start: 0,
+            current: 0,
+            line: 1,
+        }
     }
 
-    pub fn init(&mut self) {
-        self.start = 0;
-        self.current = 0;
-        self.line = 1;
-    }
+    pub fn scan_token(&mut self) -> Token<'s> {
+        self.skip_whitespace();
 
-    pub fn scan_token<'a>(&mut self, source: &'a str) -> Token<'a> {
         self.start = self.current;
 
-        let kind = if self.is_at_end(source) {
+        let kind = if self.is_at_end() {
             TokenKind::Eof
         } else {
-            let c = self.advance(source);
+            let c = self.advance();
 
             use TokenKind::*;
 
@@ -49,102 +49,102 @@ impl Scanner {
                 b'*' => Star,
                 b'%' => Percent,
                 b'!' => {
-                    if self.match_advance(source, b'=') {
+                    if self.match_advance(b'=') {
                         BangEqual
                     } else {
                         Bang
                     }
                 }
                 b'=' => {
-                    if self.match_advance(source, b'=') {
+                    if self.match_advance(b'=') {
                         EqualEqual
                     } else {
                         Equal
                     }
                 }
                 b'<' => {
-                    if self.match_advance(source, b'=') {
+                    if self.match_advance(b'=') {
                         LessEqual
                     } else {
                         Less
                     }
                 }
                 b'>' => {
-                    if self.match_advance(source, b'=') {
+                    if self.match_advance(b'=') {
                         GreaterEqual
                     } else {
                         Greater
                     }
                 }
-                b'"' => self.string(source),
-                b'0'..=b'9' => self.number(source),
-                b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.identifier(source),
+                b'"' => self.string(),
+                b'0'..=b'9' => self.number(),
+                b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.identifier(),
                 _ => UnexpectedCharacter,
             }
         };
 
         Token {
             kind,
-            span: &source[self.start..self.current],
+            span: &self.source[self.start..self.current],
             line: self.line,
         }
     }
 
-    fn is_at_end(&self, source: &str) -> bool {
-        self.current >= source.len()
+    fn is_at_end(&self) -> bool {
+        self.current >= self.source.len()
     }
 
-    fn advance(&mut self, source: &str) -> u8 {
+    fn advance(&mut self) -> u8 {
         let i = self.current;
         self.current += 1;
-        source.as_bytes()[i]
+        self.source.as_bytes()[i]
     }
 
-    fn match_advance(&mut self, source: &str, byte: u8) -> bool {
-        if self.is_at_end(source) {
+    fn match_advance(&mut self, byte: u8) -> bool {
+        if self.is_at_end() {
             return false;
         }
-        if self.peek(source) != byte {
+        if self.peek() != byte {
             return false;
         }
         self.current += 1;
         true
     }
 
-    fn peek(&self, source: &str) -> u8 {
-        if self.is_at_end(source) {
+    fn peek(&self) -> u8 {
+        if self.is_at_end() {
             return 0;
         }
-        source.as_bytes()[self.current]
+        self.source.as_bytes()[self.current]
     }
 
-    fn peek_next(&self, source: &str) -> u8 {
-        if self.is_at_end(source) {
+    fn peek_next(&self) -> u8 {
+        if self.is_at_end() {
             return 0;
         }
         let i = self.current + 1;
-        if i >= source.len() {
+        if i >= self.source.len() {
             return 0;
         }
-        source.as_bytes()[i]
+        self.source.as_bytes()[i]
     }
 
-    pub fn skip_whitespace(&mut self, source: &str) {
+    pub fn skip_whitespace(&mut self) {
         loop {
-            let c = self.peek(source);
+            let c = self.peek();
 
             match c {
                 b' ' | b'\r' | b'\t' => {
-                    self.advance(source);
+                    self.advance();
                 }
                 b'\n' => {
                     self.line += 1;
-                    self.advance(source);
+                    self.advance();
                 }
                 b'/' => {
-                    if self.peek_next(source) == b'/' {
-                        while self.peek(source) != b'\n' && !self.is_at_end(source) {
-                            self.advance(source);
+                    if self.peek_next() == b'/' {
+                        while self.peek() != b'\n' && !self.is_at_end() {
+                            self.advance();
                         }
                     } else {
                         break;
@@ -155,49 +155,57 @@ impl Scanner {
         }
     }
 
-    fn string(&mut self, source: &str) -> TokenKind {
-        while self.peek(source) != b'"' && !self.is_at_end(source) {
-            if self.peek(source) == b'\n' {
+    fn string(&mut self) -> TokenKind {
+        while self.peek() != b'"' && !self.is_at_end() {
+            if self.peek() == b'\n' {
                 self.line += 1;
             }
-            self.advance(source);
+            if self.peek() == b'\\' {
+                // advance to skip the check for double quote
+                self.advance();
+
+                if self.is_at_end() {
+                    return TokenKind::UnterminatedString;
+                }
+            }
+            self.advance();
         }
 
-        if self.is_at_end(source) {
+        if self.is_at_end() {
             return TokenKind::UnterminatedString;
         }
 
-        self.advance(source);
+        self.advance();
 
         TokenKind::String
     }
 
-    fn number(&mut self, source: &str) -> TokenKind {
-        while is_digit(self.peek(source)) && !self.is_at_end(source) {
-            self.advance(source);
+    fn number(&mut self) -> TokenKind {
+        while is_digit(self.peek()) && !self.is_at_end() {
+            self.advance();
         }
 
-        if self.peek(source) == b'.' && is_digit(self.peek_next(source)) {
-            self.advance(source);
+        if self.peek() == b'.' && is_digit(self.peek_next()) {
+            self.advance();
 
-            while is_digit(self.peek(source)) && !self.is_at_end(source) {
-                self.advance(source);
+            while is_digit(self.peek()) && !self.is_at_end() {
+                self.advance();
             }
         }
 
         TokenKind::Number
     }
 
-    fn identifier(&mut self, source: &str) -> TokenKind {
-        while is_alpha(self.peek(source)) || is_digit(self.peek(source)) {
-            self.advance(source);
+    fn identifier(&mut self) -> TokenKind {
+        while is_alpha(self.peek()) || is_digit(self.peek()) {
+            self.advance();
         }
 
-        self.identifier_type(source)
+        self.identifier_type()
     }
 
-    fn identifier_type(&mut self, source: &str) -> TokenKind {
-        match str_to_keyword(&source[self.start..self.current]) {
+    fn identifier_type(&mut self) -> TokenKind {
+        match str_to_keyword(&self.source[self.start..self.current]) {
             Some(keyword) => keyword,
             None => TokenKind::Identifier,
         }
