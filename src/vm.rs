@@ -4,6 +4,7 @@ use crate::compiler::compile;
 use crate::value::Object;
 use crate::value::Value;
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 const STACK_MAX: usize = 256;
@@ -15,6 +16,7 @@ pub struct Vm {
     debug: bool,
     stack: Vec<Value>,
     objects: Vec<std::rc::Weak<Object>>,
+    globals: HashMap<String, Value>,
 }
 
 impl Vm {
@@ -25,6 +27,7 @@ impl Vm {
             debug: true,
             stack: Vec::with_capacity(STACK_MAX),
             objects: vec![],
+            globals: HashMap::new(),
         }
     }
 
@@ -38,14 +41,17 @@ impl Vm {
     pub fn run(&mut self) -> Result<(), InterpretError> {
         loop {
             if self.debug {
-                print!("          ");
+                print!("    stack ");
                 for v in self.stack.iter() {
                     print!("[ {:?} ]", v);
                 }
                 println!();
-                print!("          ");
+                print!("  objects ");
                 for v in self.objects.iter() {
-                    print!("[ {:?} ]", v.upgrade().is_some());
+                    match v.upgrade() {
+                        Some(p) => print!("[ Object#{:p} ]", p),
+                        None => print!("[ Empty ]"),
+                    }
                 }
                 println!();
                 self.chunk.disassemble_instruction(self.ip);
@@ -54,26 +60,90 @@ impl Vm {
             let instruction = self.read_byte();
             use OpCode::*;
             match instruction.try_into() {
-                Ok(i) => match i {
+                Ok(inst) => match inst {
                     Constant => {
                         let constant_id = self.read_byte() as usize;
                         let constant = self.chunk.get_constant(constant_id);
                         self.push(constant.clone());
                     }
                     LongConstant => {
-                        let mut constant_id = 0;
-                        for _ in 1..=3 {
-                            constant_id = (constant_id << 8) | self.read_byte() as usize;
-                        }
+                        let constant_id = self.read_int(3);
                         let constant = self.chunk.get_constant(constant_id);
                         self.push(constant.clone());
                     }
                     Nil => self.push(Value::Nil),
                     True => self.push(Value::Boolean(true)),
                     False => self.push(Value::Boolean(false)),
+                    Pop => {
+                        self.pop()?;
+                    }
+                    GetGlobal => {
+                        let constant_id = self.read_byte();
+                        let constant = self.chunk.get_constant(constant_id as usize);
+                        let name = constant.as_string().unwrap().to_string();
+                        if let Some(value) = self.globals.get(&name) {
+                            self.push(value.clone());
+                        } else {
+                            let e = self.report_runtime_error("Undefined variable.");
+                            return Err(e);
+                        }
+                    }
+                    GetLongGlobal => {
+                        let constant_id = self.read_int(3);
+                        let constant = self.chunk.get_constant(constant_id);
+                        let name = constant.as_string().unwrap().to_string();
+                        if let Some(value) = self.globals.get(&name) {
+                            self.push(value.clone());
+                        } else {
+                            let e = self.report_runtime_error("Undefined variable.");
+                            return Err(e);
+                        }
+                    }
+                    DefineGlobal => {
+                        let constant_id = self.read_byte();
+                        let constant = self.chunk.get_constant(constant_id as usize);
+                        let name = constant.as_string().unwrap().to_string();
+                        self.globals.insert(name, self.peek(0).clone());
+                        self.pop()?;
+                    }
+                    DefineLongGlobal => {
+                        let constant_id = self.read_int(3);
+                        let constant = self.chunk.get_constant(constant_id);
+                        let name = constant.as_string().unwrap().to_string();
+                        self.globals.insert(name, self.peek(0).clone());
+                        self.pop()?;
+                    }
+                    SetGlobal => {
+                        let constant_id = self.read_byte();
+                        let constant = self.chunk.get_constant(constant_id as usize);
+                        let name = constant.as_string().unwrap().to_string();
+                        let val = self.peek(0).clone();
+                        if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                            self.globals.entry(name)
+                        {
+                            entry.insert(val);
+                        } else {
+                            let e = self.report_runtime_error("Undefined variable.");
+                            return Err(e);
+                        }
+                    }
+                    SetLongGlobal => {
+                        let constant_id = self.read_int(3);
+                        let constant = self.chunk.get_constant(constant_id);
+                        let name = constant.as_string().unwrap().to_string();
+                        let val = self.peek(0).clone();
+                        if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                            self.globals.entry(name)
+                        {
+                            entry.insert(val);
+                        } else {
+                            let e = self.report_runtime_error("Undefined variable.");
+                            return Err(e);
+                        }
+                    }
                     Equal => {
-                        let b = self.pop();
-                        let a = self.pop();
+                        let b = self.pop()?;
+                        let a = self.pop()?;
                         self.push(Value::Boolean(a == b));
                     }
                     Greater => self.binary_cmp(greater_than)?,
@@ -90,20 +160,24 @@ impl Vm {
                     Divide => self.binary(std::ops::Div::div)?,
                     Remainder => self.binary(std::ops::Rem::rem)?,
                     Not => {
-                        let v = self.pop();
+                        let v = self.pop()?;
                         self.push(Value::Boolean(!v.truthiness()));
                     }
                     Negate => {
                         if let Value::Number(_) = self.peek(0) {
-                            let v = self.pop();
+                            let v = self.pop()?;
                             self.push((-f64::try_from(v)?).into());
                         } else {
                             let e = self.report_runtime_error("Operand must be a number.");
                             return Err(e);
                         }
                     }
+                    Print => {
+                        let v = self.pop()?;
+                        println!("{}", v);
+                    }
                     Return => {
-                        println!("{:?}", self.pop());
+                        //~ println!("{:?}", self.pop()?);
                         return Ok(());
                     }
                 },
@@ -120,6 +194,14 @@ impl Vm {
         byte
     }
 
+    fn read_int(&mut self, size_in_bytes: usize) -> usize {
+        let mut int = 0;
+        for _ in 0..size_in_bytes {
+            int = (int << 8) | self.read_byte() as usize;
+        }
+        int
+    }
+
     fn reset_stack(&mut self) {
         self.stack.clear();
     }
@@ -132,15 +214,17 @@ impl Vm {
         self.stack.push(value);
     }
 
-    fn pop(&mut self) -> Value {
-        self.stack.pop().unwrap()
+    fn pop(&mut self) -> Result<Value, InterpretError> {
+        self.stack
+            .pop()
+            .ok_or(InterpretError::Ice("Popped Empty Stack"))
     }
 
     fn binary(&mut self, f: fn(f64, f64) -> f64) -> Result<(), InterpretError> {
         if let Value::Number(_) = self.peek(0) {
             if let Value::Number(_) = self.peek(1) {
-                let b = self.pop().try_into()?;
-                let a = self.pop().try_into()?;
+                let b = self.pop()?.try_into()?;
+                let a = self.pop()?.try_into()?;
                 self.push(f(a, b).into());
                 return Ok(());
             }
@@ -153,8 +237,8 @@ impl Vm {
     fn binary_cmp(&mut self, f: fn(f64, f64) -> bool) -> Result<(), InterpretError> {
         if let Value::Number(_) = self.peek(0) {
             if let Value::Number(_) = self.peek(1) {
-                let b = self.pop().try_into()?;
-                let a = self.pop().try_into()?;
+                let b = self.pop()?.try_into()?;
+                let a = self.pop()?.try_into()?;
                 self.push(f(a, b).into());
                 return Ok(());
             }
@@ -172,8 +256,8 @@ impl Vm {
     }
 
     fn concatenate(&mut self) -> Result<(), InterpretError> {
-        let b = TryInto::<String>::try_into(self.pop())?;
-        let a = TryInto::<String>::try_into(self.pop())?;
+        let b = TryInto::<String>::try_into(self.pop()?)?;
+        let a = TryInto::<String>::try_into(self.pop()?)?;
 
         let string = format!("{}{}", a, b);
 

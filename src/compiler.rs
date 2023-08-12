@@ -1,3 +1,4 @@
+use crate::chunk::constant_is_long;
 use crate::chunk::Chunk;
 use crate::chunk::OpCode;
 use crate::scanner::Scanner;
@@ -17,7 +18,7 @@ struct Parser<'a> {
     chunk: Chunk,
 }
 
-type ParseFn = fn(&mut Parser<'_>) -> ();
+type ParseFn = fn(&mut Parser<'_>, bool) -> ();
 
 /*
 struct Rule {
@@ -28,7 +29,7 @@ struct Rule {
 */
 
 #[repr(u8)]
-#[derive(TryFromPrimitive, Clone, Copy)]
+#[derive(TryFromPrimitive, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
     None,
     Assignment, // =
@@ -76,14 +77,31 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // match() in book
+    fn check_advance(&mut self, kind: TokenKind) -> bool {
+        if !self.check(kind) {
+            false
+        } else {
+            self.advance();
+            true
+        }
+    }
+
+    fn check(&mut self, kind: TokenKind) -> bool {
+        match &self.current {
+            Some(t) => t.kind == kind,
+            None => false,
+        }
+    }
+
     // errorAtCurrent() in book
     fn report_error_at_current(&mut self, message: &str) {
-        self.report_error_at(self.current.as_ref().unwrap().clone(), message)
+        self.report_error_at(self.current.clone().unwrap(), message)
     }
 
     // error() in book
     fn report_error_at_previous(&mut self, message: &str) {
-        self.report_error_at(self.previous.as_ref().unwrap().clone(), message)
+        self.report_error_at(self.previous.clone().unwrap(), message)
     }
 
     // errorAt() in book
@@ -126,6 +144,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn emit_int(&mut self, int: usize, size_in_bytes: usize) {
+        let bytes = int.to_le_bytes();
+
+        for i in 1..=size_in_bytes {
+            let byte = bytes[size_in_bytes - i];
+            self.chunk.write(byte, self.previous.as_ref().unwrap().line)
+        }
+    }
+
     fn emit_constant(&mut self, value: Value) {
         self.chunk
             .write_constant(value, self.previous.as_ref().unwrap().line);
@@ -139,36 +166,121 @@ impl Parser<'_> {
 
         let prefix_rule = get_rule_prefix(&self.previous.as_ref().unwrap().kind);
 
-        if prefix_rule.is_none() {
-            self.report_error_at_previous("Expect expression.");
-            return;
-        }
 
-        prefix_rule.unwrap()(self);
+        let can_assign = if let Some(rule) = prefix_rule {
+            let can_assign = precedence <= Precedence::Assignment;
+            rule(self, can_assign);
+            can_assign
+        } else {
+            self.report_error_at_previous("Expect expression.");
+            return
+        };
 
         while precedence as u8 <= get_rule_precedence(&self.current.as_ref().unwrap().kind) as u8 {
             self.advance();
             let infix_rule = get_rule_infix(&self.previous.as_ref().unwrap().kind);
-            infix_rule.unwrap()(self);
+            infix_rule.unwrap()(self, can_assign);
         }
+
+        if can_assign && self.check_advance(TokenKind::Equal) {
+            self.report_error_at_previous("Invalid assignment target.");
+        }
+    }
+
+    fn parse_variable(&mut self, error_message: &str) -> usize {
+        self.consume(TokenKind::Identifier, error_message);
+        let token = self.previous.clone().unwrap();
+        self.identifier_constant(token)
+    }
+
+    fn define_variable(&mut self, global: usize) {
+        if constant_is_long(global) {
+            self.emit_byte(OpCode::DefineLongGlobal as u8);
+            self.emit_int(global, 3);
+        } else {
+            self.emit_bytes(&[OpCode::DefineGlobal as u8, global as u8]);
+        }
+    }
+
+    fn identifier_constant(&mut self, token: Token) -> usize {
+        self.chunk.add_constant(token.span.to_string().into())
     }
 
     fn expression(&mut self) {
         self.parse_precedence(Precedence::Assignment);
     }
 
-    fn grouping(&mut self) {
+    fn declaration(&mut self) {
+        if self.check_advance(TokenKind::Var) {
+            self.variable_declaration();
+        } else {
+            self.statement();
+        }
+
+        if self.panic_mode {
+            self.synchronize();
+        }
+    }
+
+    fn variable_declaration(&mut self) {
+        let global = self.parse_variable("Expect variable name.");
+
+        if self.check_advance(TokenKind::Equal) {
+            self.expression();
+        } else {
+            self.emit_byte(OpCode::Nil as u8);
+        }
+
+        self.consume(TokenKind::Semicolon, "Expect `;`.");
+
+        self.define_variable(global);
+    }
+
+    fn statement(&mut self) {
+        if self.check_advance(TokenKind::Print) {
+            self.print_statement();
+        } else {
+            self.expression_statement();
+        }
+    }
+
+    fn expression_statement(&mut self) {
+        self.expression();
+        self.consume(TokenKind::Semicolon, "Expect `;`.");
+        self.emit_byte(OpCode::Pop as u8);
+    }
+
+    fn print_statement(&mut self) {
+        self.expression();
+        self.consume(TokenKind::Semicolon, "Expect `;`.");
+        self.emit_byte(OpCode::Print as u8);
+    }
+
+    fn synchronize(&mut self) {
+        self.panic_mode = false;
+
+        use TokenKind::*;
+
+        while let Some(t) = &self.current {
+            match t.kind {
+                Class | Fun | Var | For | If | While | Print | Return | Eof => break,
+                _ => self.advance(),
+            }
+        }
+    }
+
+    fn grouping(&mut self, _can_assign: bool) {
         self.expression();
         self.consume(TokenKind::RightParen, "Expect `)`.");
     }
 
-    fn number(&mut self) {
+    fn number(&mut self, _can_assign: bool) {
         let string = self.previous.as_ref().unwrap().span;
         let number = string.parse::<f64>().unwrap();
         self.emit_constant(number.into());
     }
 
-    fn unary(&mut self) {
+    fn unary(&mut self, _can_assign: bool) {
         let operator_kind = self.previous.as_ref().unwrap().kind;
 
         self.parse_precedence(Precedence::Assignment);
@@ -180,7 +292,7 @@ impl Parser<'_> {
         }
     }
 
-    fn binary(&mut self) {
+    fn binary(&mut self, _can_assign: bool) {
         let operator_kind = self.previous.as_ref().unwrap().kind;
 
         let precedence = get_rule_precedence(&operator_kind);
@@ -203,7 +315,7 @@ impl Parser<'_> {
         }
     }
 
-    fn literal(&mut self) {
+    fn literal(&mut self, _can_assign: bool) {
         let kind = self.previous.as_ref().unwrap().kind;
 
         match kind {
@@ -214,7 +326,7 @@ impl Parser<'_> {
         }
     }
 
-    fn string(&mut self) {
+    fn string(&mut self, _can_assign: bool) {
         let token = self.previous.as_ref().unwrap();
 
         match parse_string(&token.span[1..(token.span.len() - 1)]) {
@@ -222,25 +334,53 @@ impl Parser<'_> {
             Err(s) => self.report_error_at_previous(s),
         }
     }
+
+    fn variable(&mut self, can_assign: bool) {
+        self.named_variable(self.previous.clone().unwrap(), can_assign);
+    }
+
+    fn named_variable(&mut self, name_token: Token, can_assign: bool) {
+        let global = self.identifier_constant(name_token);
+
+        if can_assign && self.check_advance(TokenKind::Equal) {
+            // set
+            self.expression();
+            if constant_is_long(global) {
+                self.emit_byte(OpCode::SetLongGlobal as u8);
+                self.emit_int(global, 3);
+            } else {
+                self.emit_bytes(&[OpCode::SetGlobal as u8, global as u8]);
+            }
+        } else {
+            // get
+            if constant_is_long(global) {
+                self.emit_byte(OpCode::GetLongGlobal as u8);
+                self.emit_int(global, 3);
+            } else {
+                self.emit_bytes(&[OpCode::GetGlobal as u8, global as u8]);
+            }
+        }
+    }
 }
 
 fn get_rule_prefix(token: &TokenKind) -> Option<ParseFn> {
-    let literal = |a: &mut Parser<'_>| Parser::literal(a);
+    let literal = |self_: &mut Parser<'_>, can_assign: bool| Parser::literal(self_, can_assign);
     Some(match token {
-        TokenKind::LeftParen => |a: &mut Parser<'_>| Parser::grouping(a),
-        TokenKind::Minus => |a: &mut Parser<'_>| Parser::unary(a),
-        TokenKind::Bang => |a: &mut Parser<'_>| Parser::unary(a),
-        TokenKind::Number => |a: &mut Parser<'_>| Parser::number(a),
+        TokenKind::LeftParen => |self_: &mut Parser<'_>, can_assign: bool| Parser::grouping(self_, can_assign),
+        TokenKind::Minus => |self_: &mut Parser<'_>, can_assign: bool| Parser::unary(self_, can_assign),
+        TokenKind::Bang => |self_: &mut Parser<'_>, can_assign: bool| Parser::unary(self_, can_assign),
+        TokenKind::Number => |self_: &mut Parser<'_>, can_assign: bool| Parser::number(self_, can_assign),
         TokenKind::Nil => literal,
         TokenKind::False => literal,
         TokenKind::True => literal,
-        TokenKind::String => |a: &mut Parser<'_>| Parser::string(a),
+        TokenKind::String => |self_: &mut Parser<'_>, can_assign: bool| Parser::string(self_, can_assign),
+        TokenKind::Identifier => |self_: &mut Parser<'_>, can_assign: bool| Parser::variable(self_, can_assign),
         _ => return None,
     })
 }
 
 fn get_rule_infix(token: &TokenKind) -> Option<ParseFn> {
-    let binary = |a: &mut Parser<'_>| Parser::binary(a);
+    let binary = |self_: &mut Parser<'_>, can_assign: bool| Parser::binary(self_, can_assign);
     Some(match token {
         TokenKind::Plus => binary,
         TokenKind::Minus => binary,
@@ -307,7 +447,15 @@ pub fn compile(source: &str) -> Result<Chunk, InterpretError> {
     let mut parser = Parser::new(scanner);
 
     parser.advance();
-    parser.expression();
+
+    while let Some(t) = &parser.current {
+        if t.kind == TokenKind::Eof {
+            break;
+        } else {
+            parser.declaration();
+        }
+    }
+
     parser.consume(TokenKind::Eof, "Expect end of expression.");
 
     if parser.had_error {

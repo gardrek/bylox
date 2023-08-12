@@ -11,6 +11,13 @@ pub enum OpCode {
     Nil,
     True,
     False,
+    Pop,
+    GetGlobal,
+    GetLongGlobal,
+    DefineGlobal,
+    DefineLongGlobal,
+    SetGlobal,
+    SetLongGlobal,
     Equal,
     Greater,
     Less,
@@ -21,6 +28,7 @@ pub enum OpCode {
     Remainder,
     Not,
     Negate,
+    Print,
     Return,
 }
 
@@ -63,13 +71,21 @@ impl Chunk {
         }
     }
 
-    fn add_constant(&mut self, constant: Value) -> usize {
+    pub fn add_constant(&mut self, constant: Value) -> usize {
         self.constants.push(constant);
         self.constants.len() - 1
     }
 
     pub fn get_constant(&self, id: usize) -> &Value {
         &self.constants[id]
+    }
+}
+
+pub fn constant_is_long(id: usize) -> bool {
+    match id {
+        0..=0xff => false,
+        0x100..=0xffffff => true,
+        _ => panic!("reached constant limit fo 2^24"),
     }
 }
 
@@ -112,6 +128,13 @@ impl Chunk {
                 Nil => simple_instruction("OP_NIL", offset),
                 True => simple_instruction("OP_TRUE", offset),
                 False => simple_instruction("OP_FALSE", offset),
+                Pop => simple_instruction("OP_POP", offset),
+                GetGlobal => self.constant_instruction("OP_GET_GLOBAL", offset),
+                GetLongGlobal => self.long_constant_instruction("OP_GET_LONG_GLOBAL", offset),
+                DefineGlobal => self.constant_instruction("OP_DEFINE_GLOBAL", offset),
+                DefineLongGlobal => self.long_constant_instruction("OP_DEFINE_LONG_GLOBAL", offset),
+                SetGlobal => self.constant_instruction("OP_SET_GLOBAL", offset),
+                SetLongGlobal => self.long_constant_instruction("OP_SET_LONG_GLOBAL", offset),
                 Equal => simple_instruction("OP_EQUAL", offset),
                 Greater => simple_instruction("OP_GREATER", offset),
                 Less => simple_instruction("OP_LESS", offset),
@@ -122,6 +145,7 @@ impl Chunk {
                 Remainder => simple_instruction("OP_REMAINDER", offset),
                 Not => simple_instruction("OP_NOT", offset),
                 Negate => simple_instruction("OP_NEGATE", offset),
+                Print => simple_instruction("OP_PRINT", offset),
                 Return => simple_instruction("OP_RETURN", offset),
             },
             _ => {

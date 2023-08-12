@@ -31,9 +31,19 @@ impl Value {
         match self {
             Value::Object(p) => match &p.kind {
                 ObjectKind::String(_) => true,
-                _ => false,
+                //~ _ => false,
             },
             _ => false,
+        }
+    }
+
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Value::Object(p) => match &p.kind {
+                ObjectKind::String(s) => Some(s),
+                //~ _ => false,
+            },
+            _ => None,
         }
     }
 }
@@ -116,7 +126,7 @@ impl TryFrom<Value> for String {
         match value {
             Value::Object(p) => match &p.kind {
                 ObjectKind::String(s) => Ok(s.to_string()),
-                _ => Err(InterpretError::Ice("Not a string")),
+                //~ _ => Err(InterpretError::Ice("Not a string")),
             },
             _ => Err(InterpretError::Ice("Not a string")),
         }
@@ -189,7 +199,7 @@ impl PartialEq for Value {
             (Number(a), Number(b)) => a == b,
             (Object(a), Object(b)) => match (&a.kind, &b.kind) {
                 (ObjectKind::String(s_a), ObjectKind::String(s_b)) => s_a == s_b,
-                _ => Rc::ptr_eq(a, b),
+                //~ _ => Rc::ptr_eq(a, b),
             },
             (Nil, _) | (Boolean(_), _) | (Number(_), _) | (Object(_), _) => false,
         }
